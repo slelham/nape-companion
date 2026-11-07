@@ -115,7 +115,7 @@ This app does not insert a `v` when the device omitted one.
 | `0xD024`, `0xD027`, `0xD028`, `0xD030`, `0xD031`, `0xD05A` | Named in OpenMouse's general receiver list. Not in the Nape product map. | Not opened. |
 | `0xD05B`, `0xD078` | OpenMouse lists these with the 8K Nordic platform and says the pairing is not confirmed. That protocol uses usage page `0xFF0A`. | Not opened. |
 | `0xD060` and other M-series ids | M6 wired is `0xD060` on usage page `0xFFC1`. Other Keychron mice use `0xFFC1`, `0x008C`, or `0xFF0A`. | Not opened. |
-| Bluetooth | Not documented as this RAW HID exchange. | Not opened. The menu says Bluetooth is not supported. |
+| Bluetooth | The trackball pairs and points over Bluetooth. The documented layer query has no published Bluetooth transport. See below. | Not opened. A visible Bluetooth interface is reported and left closed. |
 
 If the wired trackball and a receiver are both present, the wired interface
 wins. A receiver that does not expose `0xFF60` / `0x61` stays disconnected.
@@ -152,3 +152,79 @@ These states are different on purpose:
 
 No trackball was attached while this was written, so none of those branches
 has been seen on hardware.
+
+## Bluetooth feasibility
+
+The onboard layer is not something a pointer packet carries. The only
+documented way to read it is `0xA3` on the 32-byte vendor collection, usage
+page `0xFF60` usage `0x61`. That collection is what this feasibility
+question turns on.
+
+What is published:
+
+- dobachi’s protocol note, commit `1bca8c0`, records the exchange as WebHID
+  against vendor `0x3434` and product `0x0440`, and says three HID interfaces
+  are visible with configuration on `0xFF60` only. It does not describe a
+  Bluetooth report map.
+  https://github.com/dobachi/NapeProConfiguration/blob/1bca8c004c02e18bf41021da4116cb2955faed24/docs/nape-pro-hid-protocol.md
+- The same repository’s device note lists Bluetooth, 2.4 GHz, and USB as
+  connections, and calls the firmware ZMK-based with Keychron extensions. The
+  commands actually captured are the vendor HID reports above, not the
+  upstream ZMK Studio serial or GATT RPC.
+  https://github.com/dobachi/NapeProConfiguration/blob/1bca8c004c02e18bf41021da4116cb2955faed24/docs/nape-pro-device.md
+- OpenMouse, mouse-protocol commit `b62a1cc`, accepts a Nape only when the
+  product is `0x0440`, `0xD026`, or `0xD029` and a collection is `0xFF60` /
+  `0x61`. Its connection label is wired USB or 2.4 GHz. There is no
+  Bluetooth product id. That code is AGPL-3.0 and is not included here.
+  https://github.com/OpenMouse-Project/mouse-protocol/blob/b62a1cce2b63698ac00595efdb0067ecd54e34a0/src/drivers/keychron/nape-hid.ts
+- Keychron’s Japan product page says the trackball is tri-mode, and that
+  Launcher connects in wired mode or 2.4 GHz mode.
+  https://keychron.jp/products/keychron-nape-pro-wireless-trackball-mouse
+- Keychron Korea’s Nape Pro guide says Launcher does not support a Bluetooth
+  connection, and that settings saved on the device remain after switching
+  to Bluetooth. Firmware update is wired only.
+  https://keychron.kr/products/nape_pro/guide
+- Gizmodo Japan’s post-release FAQ, written with Keychron, says settings
+  cannot be changed while connected by Bluetooth. Wired and 2.4 GHz are the
+  Launcher paths.
+  https://www.gizmodo.jp/article/napepro_faq-re/
+- WebHID is not limited to USB. The HID specification covers Bluetooth as a
+  transport, and Chromium implements WebHID for Bluetooth HID devices.
+  https://hid.spec.whatwg.org/
+  The WebHID blocklist forbids the generic mouse collection (`0x0001` /
+  `0x0002`) and the keyboard collection (`0x0001` / `0x0006`). Usage page
+  `0xFF60` is not in that list.
+  https://github.com/WICG/webhid/blob/master/blocklist.txt
+  Launcher asking for a cable or a receiver is therefore not evidence that
+  a browser is incapable of a vendor HID report over Bluetooth.
+- A separate macOS app, NapeProFix, reads battery over Bluetooth from the
+  standard Battery Service `0x180F` characteristic `0x2A19`. It sends
+  `A7 31` only to an `0xFF60` HID interface whose name matches the receiver
+  or the Nape Pro. Its author states that the device layer does not arrive
+  in the key events they receive.
+  https://github.com/jprabadi-ship-it/NapeProFix/blob/master/Sources/NapeProFix/BatteryMonitor.swift
+  https://github.com/jprabadi-ship-it/NapeProFix/blob/master/README.md
+  Those key events are not a layer query. The same button can be assigned
+  the same keycode on more than one layer, and pointer motion has no layer
+  field at all.
+
+What is not published: a Bluetooth HID report descriptor for this trackball,
+or a capture of `0xA3` on that link. macOS publishes HID devices from USB
+and from Bluetooth as `IOHIDDevice` services. `IOHIDDeviceOpen` can address
+a vendor collection only when a service for it is actually listed. Nothing
+here shows that the Nape Pro’s Bluetooth map contains `0xFF60` / `0x61`.
+The Battery Service is a different GATT service and does not carry `0xA3`.
+
+Until that map is seen, the documented read has nowhere to go over
+Bluetooth. The app leaves a Bluetooth interface closed for that reason.
+Pointing over Bluetooth, and keeping settings that were written over USB or
+2.4 GHz, are separate facts and already work without this query.
+
+The observation that would settle it, with the cable and the receiver
+unplugged and the side switch on Bluetooth: the USB product id is not
+required. Copy the Bluetooth HID device’s product id, transport, and each
+collection’s usage page and usage from System Information. Do not copy the
+serial number. If no collection is `0xFF60` / `0x61`, the documented query
+is not on that link. If that collection is present and is not the mouse
+collection, a later read-only open could try `0xA3`. This repository has
+not done that.

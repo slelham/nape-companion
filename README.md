@@ -173,7 +173,11 @@ Keychron Link-KM (`0xD026`) and Link-KM Type C (`0xD029`) are opened only
 when they expose the same RAW collection. The menu marks that path
 **unverified**. OpenMouse lists those two receivers next to the Nape Pro,
 and the check in that project is not a capture of a Nape Pro on a dongle.
-Other Keychron receivers are not opened. Bluetooth is not supported.
+Other Keychron receivers are not opened. Bluetooth is not opened. The
+trackball does point over Bluetooth, and settings stored on it remain
+there, but the documented layer query has no published Bluetooth transport.
+`docs/protocol.md` records the sources and the one report-map fact that
+would settle it. Pointer motion is not a substitute for that query.
 
 If both the cable and a receiver are attached, the cable is used.
 
