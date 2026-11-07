@@ -17,7 +17,7 @@ enum HIDFailureMessage {
     static func message(for code: Int32) -> String {
         switch code {
         case HIDResult.exclusiveAccess:
-            return "The RAW HID interface is already open in another app. Quit Keychron Launcher, or the browser tab that has the trackball open, and this menu will try again."
+            return "The config interface is already open in another app. Keychron Launcher can keep working while this app is refused. Quit Launcher, or the browser tab that has the trackball open, and this menu will try again. The mouse collection was not opened."
         case HIDResult.notPrivileged, HIDResult.notPermitted:
             return "macOS refused the HID open (\(hex(code))). If Nape Companion appears under System Settings → Privacy & Security → Input Monitoring, turn it on and relaunch. The app opens the vendor collection, usage page 0xFF60 usage 0x61, and does not open the mouse pointer collection."
         case HIDResult.unsupported:

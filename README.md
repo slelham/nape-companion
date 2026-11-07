@@ -141,6 +141,37 @@ Other Keychron receivers are not opened. Bluetooth is not supported.
 
 If both the cable and a receiver are attached, the cable is used.
 
+## If the menu does not show a layer
+
+The menu has to say **Nape Companion 0.1.1**. That is the build which
+lists HID interfaces before it opens one. Rebuild this draft branch:
+
+```sh
+git fetch origin cursor/nape-menu-bar-57ff
+git switch cursor/nape-menu-bar-57ff
+git pull --ff-only origin cursor/nape-menu-bar-57ff
+./build.sh
+open "build/Nape Companion.app"
+```
+
+Quit Keychron Launcher, then open the companion menu. Launcher working does
+not mean this app can read the trackball at the same time. Launcher keeps
+its own HID claim.
+
+| Menu | What it means |
+|---|---|
+| `–` and "No HID interface for vendor 0x3434 product 0x0440" | The registry walk did not see that product, or a device whose name contains Nape. |
+| `!` and a "Collections:" line | The device is visible. The usage pages on that line are what macOS advertised. The config interface was not opened. |
+| `!` and "already open" | Something else holds the config interface. |
+| `!` and "did not answer" | The config interface opened, and the layer read timed out. The device is not missing. |
+| `!` and Input Monitoring, or "refused" | macOS blocked the open. The mouse collection was still not opened. |
+
+Copy those menu lines if it still fails. They contain product ids and usage
+pages, not a serial number. Do not send the serial number. If the menu stays
+on the "not found" line while the pointer works, the extra fact that would
+help is the USB product id and each interface's usage page and usage from
+System Information. The serial number is not needed.
+
 ## Development checks
 
 Use the branch commands in **Build and run**. `swift test` checks the

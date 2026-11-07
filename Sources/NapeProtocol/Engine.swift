@@ -65,14 +65,20 @@ struct CompanionEngine {
         self.names = LayerNames.normalize(names)
     }
 
-    mutating func interfacesChanged(_ interfaces: [SeenInterface]) {
+    mutating func interfacesChanged(_ interfaces: [SeenInterface], registryStatus: Int32 = 0) {
         if asleep {
             clearSelection()
             phase = .disconnected(.asleep)
             return
         }
-        switch NapeIdentity.choose(interfaces) {
-        case .idle:
+        if registryStatus != 0, interfaces.isEmpty {
+            showBlocked(
+                "IOKit could not list HID services (0x\(String(format: "%08X", UInt32(bitPattern: registryStatus)))). No interface was opened."
+            )
+            return
+        }
+        switch NapeIdentity.classify(interfaces) {
+        case .absent:
             let asleep: Bool
             if case .disconnected(.asleep) = phase {
                 asleep = true
@@ -93,6 +99,8 @@ struct CompanionEngine {
                 return
             }
             select(index: index, transport: chosen)
+        case .blocked(let message):
+            showBlocked(message)
         }
     }
 
@@ -200,6 +208,14 @@ struct CompanionEngine {
         }
     }
 
+    private mutating func showBlocked(_ message: String) {
+        if case .failed(let failure) = phase, failure.message == message, desiredDeviceIndex == nil {
+            return
+        }
+        clearSelection()
+        phase = .failed(FailureState(transport: nil, message: message, lastConfirmed: nil))
+    }
+
     private mutating func select(index: Int, transport: TransportKind) {
         clearCaches()
         desiredDeviceIndex = index
@@ -258,7 +274,7 @@ struct CompanionEngine {
         switch query {
         case .currentLayer:
             fail(
-                "The trackball did not answer the current-layer query within \(seconds(PollTiming.responseTimeout)) seconds.",
+                "The trackball did not answer the current-layer query within \(seconds(PollTiming.responseTimeout)) seconds. The config interface had been opened; this is not a missing device.",
                 at: now
             )
         case .liveOrientation:

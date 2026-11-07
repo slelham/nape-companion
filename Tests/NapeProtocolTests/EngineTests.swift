@@ -175,6 +175,40 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(live.accessibilityLabel.contains("unverified"))
     }
 
+    func testMouseCollectionIsAnErrorNotAMissingDevice() {
+        var engine = CompanionEngine()
+        let now = Date(timeIntervalSince1970: 1_700_001_050)
+        let mouse = SeenInterface(
+            vendorID: 0x3434,
+            productID: 0x0440,
+            productName: "Nape Pro",
+            primaryUsagePage: 0x01,
+            primaryUsage: 0x02,
+            transport: "USB"
+        )
+        engine.interfacesChanged([mouse])
+        XCTAssertNil(engine.desiredDeviceIndex)
+        let shown = engine.presentation(at: now)
+        XCTAssertEqual(shown.title, "!")
+        XCTAssertFalse(shown.isLive)
+        let text = info(shown)
+        XCTAssertTrue(text.contains("0x0001/0x0002"), text)
+        XCTAssertTrue(text.contains("0xFF60"), text)
+        XCTAssertTrue(text.contains("not opened"), text.lowercased())
+        XCTAssertFalse(text.contains("Layer 0"))
+    }
+
+    func testRegistryFailureIsNotReportedAsUnplugged() {
+        var engine = CompanionEngine()
+        let now = Date(timeIntervalSince1970: 1_700_001_060)
+        engine.interfacesChanged([], registryStatus: 0x2BC)
+        let shown = engine.presentation(at: now)
+        XCTAssertEqual(shown.title, "!")
+        XCTAssertFalse(shown.isLive)
+        XCTAssertTrue(info(shown).contains("HID services"))
+        XCTAssertTrue(info(shown).contains("0x000002BC"))
+    }
+
     func testOpenFailureIsNotALiveLayer() {
         var engine = CompanionEngine()
         let now = Date(timeIntervalSince1970: 1_700_001_100)

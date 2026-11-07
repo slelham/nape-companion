@@ -66,5 +66,56 @@ final class IdentityTests: XCTestCase {
         let turboLink = Fixture.receiver(productID: 0xD05A)
         XCTAssertEqual(NapeIdentity.choose([mousePointer, keyboard, mSeries, turboLink]), .idle)
         XCTAssertEqual(NapeIdentity.choose([]), .idle)
+        guard case .blocked(let message) = NapeIdentity.classify([mousePointer]) else {
+            return XCTFail("A mouse-only Nape Pro must be reported, not treated as absent")
+        }
+        XCTAssertTrue(message.contains("0x0001/0x0002"), message)
+        XCTAssertTrue(message.contains("0xFF60"), message)
+        XCTAssertFalse(message.contains("serial"))
+        XCTAssertNil(engineOpen(of: [mousePointer]))
+    }
+
+    func testBluetoothAndSecondaryRawAreNotOpened() {
+        var bluetooth = Fixture.wired
+        bluetooth.transport = "BluetoothLowEnergy"
+        guard case .blocked(let bluetoothMessage) = NapeIdentity.classify([bluetooth]) else {
+            return XCTFail("Bluetooth must not be opened")
+        }
+        XCTAssertTrue(bluetoothMessage.contains("Bluetooth"), bluetoothMessage)
+        XCTAssertEqual(NapeIdentity.choose([bluetooth]), .idle)
+
+        let mouse = SeenInterface(
+            vendorID: 0x3434,
+            productID: 0x0440,
+            productName: "Nape Pro",
+            primaryUsagePage: 0x01,
+            primaryUsage: 0x02,
+            usagePairs: [UsagePair(page: 0xFF60, usage: 0x61)],
+            transport: "USB"
+        )
+        guard case .blocked(let pairMessage) = NapeIdentity.classify([mouse]) else {
+            return XCTFail("A secondary RAW pair must not be opened")
+        }
+        XCTAssertTrue(pairMessage.contains("not the primary collection"), pairMessage)
+        XCTAssertFalse(NapeIdentity.isOpenableRaw(mouse))
+
+        let renamed = SeenInterface(
+            vendorID: 0x3434,
+            productID: 0x0999,
+            productName: "Keychron Nape Pro",
+            primaryUsagePage: 0x01,
+            primaryUsage: 0x02,
+            transport: "USB"
+        )
+        guard case .blocked(let nameMessage) = NapeIdentity.classify([renamed]) else {
+            return XCTFail("A differently numbered Nape must be visible in the menu")
+        }
+        XCTAssertTrue(nameMessage.contains("0x0999"), nameMessage)
+        XCTAssertFalse(NapeIdentity.isOpenableRaw(renamed))
+    }
+
+    private func engineOpen(of interfaces: [SeenInterface]) -> Int? {
+        if case .open(let index, _) = NapeIdentity.classify(interfaces) { return index }
+        return nil
     }
 }

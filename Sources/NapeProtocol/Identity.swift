@@ -3,12 +3,27 @@
 
 import Foundation
 
+struct UsagePair: Equatable {
+    var page: Int
+    var usage: Int
+}
+
 struct SeenInterface: Equatable {
     var vendorID: Int
     var productID: Int
     var productName: String?
     var primaryUsagePage: Int?
     var primaryUsage: Int?
+    /// Other collections advertised on the same HID device. Not a reason to open it.
+    var usagePairs: [UsagePair] = []
+    /// IOKit transport string such as "USB" or "BluetoothLowEnergy". Nil when unread.
+    var transport: String? = nil
+}
+
+enum Discovery: Equatable {
+    case absent
+    case open(index: Int, transport: TransportKind)
+    case blocked(String)
 }
 
 struct HIDMatch: Equatable {
@@ -126,10 +141,20 @@ enum NapeIdentity {
     }
 
     static func choose(_ interfaces: [SeenInterface]) -> DeviceChoice {
-        for (index, interface) in interfaces.enumerated() {
-            if acceptsWired(interface) {
-                return .open(index: index, transport: .wiredUSB)
-            }
+        switch classify(interfaces) {
+        case .open(let index, let transport):
+            return .open(index: index, transport: transport)
+        case .absent, .blocked:
+            return .idle
+        }
+    }
+
+    /// Decides what the menu should say before any device is opened.
+    /// Only a primary usage page 0xFF60 usage 0x61 on USB (or an unread transport)
+    /// is `.open`. A mouse collection, a secondary vendor pair, or Bluetooth is `.blocked`.
+    static func classify(_ interfaces: [SeenInterface]) -> Discovery {
+        for (index, interface) in interfaces.enumerated() where acceptsWired(interface) {
+            return .open(index: index, transport: .wiredUSB)
         }
         for (index, interface) in interfaces.enumerated() {
             if let name = attemptedReceiverName(interface) {
@@ -139,7 +164,36 @@ enum NapeIdentity {
                 )
             }
         }
-        return .idle
+        if let message = blockage(for: interfaces) {
+            return .blocked(message)
+        }
+        return .absent
+    }
+
+    static func isWatched(_ interface: SeenInterface) -> Bool {
+        guard interface.vendorID == NapeOpcode.vendorID else { return false }
+        if interface.productID == NapeOpcode.wiredProductID { return true }
+        if receivers.contains(where: { $0.attempted && $0.productID == interface.productID }) {
+            return true
+        }
+        if let name = interface.productName?.lowercased(), name.contains("nape") {
+            return true
+        }
+        return false
+    }
+
+    static func isOpenableRaw(_ interface: SeenInterface) -> Bool {
+        guard isRawCollection(interface), !isBluetooth(interface) else { return false }
+        if acceptsWired(interface) { return true }
+        return attemptedReceiverName(interface) != nil
+    }
+
+    /// Product ids and usage pages only. No serial number and no location id.
+    static func diagnosticSummary(_ interfaces: [SeenInterface]) -> String {
+        if interfaces.isEmpty { return "watched interfaces: none" }
+        return interfaces.map { interface in
+            "\(hexID(interface.vendorID)):\(hexID(interface.productID)) \(usageSummary(interface))"
+        }.joined(separator: "; ")
     }
 
     static func hexID(_ value: Int) -> String {
@@ -150,15 +204,78 @@ enum NapeIdentity {
         interface.vendorID == NapeOpcode.vendorID
             && interface.productID == NapeOpcode.wiredProductID
             && isRawCollection(interface)
+            && !isBluetooth(interface)
     }
 
     private static func attemptedReceiverName(_ interface: SeenInterface) -> String? {
-        guard interface.vendorID == NapeOpcode.vendorID, isRawCollection(interface) else { return nil }
+        guard interface.vendorID == NapeOpcode.vendorID,
+              isRawCollection(interface),
+              !isBluetooth(interface)
+        else { return nil }
         return receivers.first { $0.attempted && $0.productID == interface.productID }?.name
     }
 
     private static func isRawCollection(_ interface: SeenInterface) -> Bool {
         interface.primaryUsagePage == NapeOpcode.rawUsagePage
             && interface.primaryUsage == NapeOpcode.rawUsage
+    }
+
+    private static func isBluetooth(_ interface: SeenInterface) -> Bool {
+        guard let transport = interface.transport?.lowercased() else { return false }
+        return transport.contains("bluetooth")
+    }
+
+    private static func hasSecondaryRaw(_ interface: SeenInterface) -> Bool {
+        guard !isRawCollection(interface) else { return false }
+        return interface.usagePairs.contains {
+            $0.page == NapeOpcode.rawUsagePage && $0.usage == NapeOpcode.rawUsage
+        }
+    }
+
+    private static func blockage(for interfaces: [SeenInterface]) -> String? {
+        let watched = interfaces.filter(isWatched)
+        guard !watched.isEmpty else { return nil }
+        var lines: [String] = []
+        let productIDs = Set(watched.map(\.productID)).sorted()
+        for productID in productIDs {
+            let rows = watched.filter { $0.productID == productID }
+            let name = rows.compactMap(\.productName).first { !$0.isEmpty }
+            let transports = Set(rows.compactMap(\.transport)).sorted()
+            var line = "Product \(hexID(productID))"
+            if let name { line += " (\(name))" }
+            if !transports.isEmpty { line += " via \(transports.joined(separator: ", "))" }
+            let collections = rows.map(usageSummary).joined(separator: "; ")
+            line += " is visible. Collections: \(collections)."
+            lines.append(line)
+        }
+        if watched.allSatisfy(isBluetooth) {
+            lines.append("Bluetooth is not opened. The documented path is wired USB.")
+        } else if watched.contains(where: hasSecondaryRaw) {
+            lines.append(
+                "Usage page 0xFF60 usage 0x61 is not the primary collection, so this app did not open the interface and is not reading mouse reports."
+            )
+        } else if !watched.contains(where: isRawCollection) {
+            lines.append("None of these collections is primary usage page 0xFF60 usage 0x61, so nothing was opened.")
+        }
+        lines.append(
+            "Keychron Launcher uses its own HID claim and can work while this app has no config interface. Quit Launcher and replug USB to try again. Mouse and keyboard collections were not opened."
+        )
+        return lines.joined(separator: "\n")
+    }
+
+    private static func usageSummary(_ interface: SeenInterface) -> String {
+        var parts: [String] = []
+        if let page = interface.primaryUsagePage, let usage = interface.primaryUsage {
+            parts.append("primary \(hexID(page))/\(hexID(usage))")
+        } else {
+            parts.append("primary usage unread")
+        }
+        for pair in interface.usagePairs {
+            let text = "\(hexID(pair.page))/\(hexID(pair.usage))"
+            if !parts.contains(where: { $0.contains(text) }) {
+                parts.append(text)
+            }
+        }
+        return parts.joined(separator: " ")
     }
 }

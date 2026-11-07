@@ -34,8 +34,8 @@ struct MenuPresentation: Equatable {
         let label: String
         switch detail {
         case .nothingAttached:
-            line = "No Nape Pro is attached."
-            label = "Disconnected. No Nape Pro is attached."
+            line = "No HID interface for vendor 0x3434 product 0x0440 was found."
+            label = "Disconnected. No Nape Pro HID interface was found."
         case .asleep:
             line = "The Mac is asleep. No layer is shown as live."
             label = "Asleep. No layer is shown as live."
@@ -49,7 +49,7 @@ struct MenuPresentation: Equatable {
             isLive: false,
             entries: [
                 .info(line),
-                .info("Plug in the Nape Pro with USB. Bluetooth is not supported."),
+                .info("Plug in with USB. If it is already plugged in, macOS is not showing product 0x0440 or a device name containing Nape. Bluetooth is not supported."),
                 .separator,
                 .rename,
                 .separator,
@@ -105,10 +105,10 @@ struct MenuPresentation: Equatable {
     }
 
     private static func failed(_ failure: FailureState, names: [String]) -> MenuPresentation {
-        var entries: [MenuEntry] = [
-            .info("Not live"),
-            .info(failure.message),
-        ]
+        var entries: [MenuEntry] = [.info("Not live")]
+        for line in failure.message.split(separator: "\n", omittingEmptySubsequences: true) {
+            entries.append(.info(String(line)))
+        }
         if let last = failure.lastConfirmed {
             let name = LayerNames.menuName(displayLayer: last.displayLayer, names: names)
             entries.append(.info(

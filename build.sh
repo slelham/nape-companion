@@ -41,6 +41,7 @@ SOURCES=(
   Sources/NapeProtocol/HIDMessages.swift
   Sources/NapeProtocol/Engine.swift
   Sources/NapeProtocol/Presentation.swift
+  App/RegistryCensus.swift
   App/HIDMonitor.swift
   App/RenamePanel.swift
   App/NapeApp.swift
@@ -92,7 +93,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>0.1.1</string>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>LSMinimumSystemVersion</key>

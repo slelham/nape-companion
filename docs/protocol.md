@@ -121,16 +121,34 @@ If the wired trackball and a receiver are both present, the wired interface
 wins. A receiver that does not expose `0xFF60` / `0x61` stays disconnected.
 That is the safe failure: the menu does not invent a layer.
 
-## macOS open
+## macOS discovery
 
-The manager and the selected device are opened with `kIOHIDOptionsTypeNone`.
-The app does not use `kIOHIDOptionsTypeSeizeDevice`, a `CGEvent` tap, or the
-mouse collection.
+The app lists `IOHIDDevice` services in the I/O Registry and reads vendor,
+product, product name, transport, primary usage, and `DeviceUsagePairs`.
+It does not read the serial number or the location id into the menu.
 
-Public `IOReturn` values from Apple's `IOReturn.h` are mapped to short
-sentences: exclusive access (`0xE00002C5`) when Launcher or a WebHID page
-already holds the interface, not privileged / not permitted
-(`0xE00002C1`, `0xE00002E2`) when Input Monitoring may be required, and
-unsupported (`0xE00002C7`) when the interface rejects the report. Whether
-macOS actually shows an Input Monitoring prompt for this open was not
-verified here. There is no trackball in the development environment.
+`IOHIDManagerOpen` is not used. Opening the manager would open every matched
+interface. A Nape Pro also exposes a mouse collection, and that collection
+is not opened and has no input callback.
+
+A service is opened only when its primary usage is page `0xFF60` usage
+`0x61`, the vendor is `0x3434`, the product is the wired id or one of the
+two unverified receivers, and the transport is not Bluetooth. The open is
+`IOHIDDeviceOpen` with `kIOHIDOptionsTypeNone`. A vendor pair that only
+appears beside a mouse primary usage is reported and left closed, because
+opening that service would be the pointer device.
+
+These states are different on purpose:
+
+| What the census saw | Menu |
+|---|---|
+| No watched interface | `–` and the product id that was looked for |
+| Product present, but not primary `0xFF60` / `0x61` | `!` plus the usage pages that were seen |
+| Bluetooth only | `!` and a line that Bluetooth was not opened |
+| Registry list itself failed | `!` and the IOKit status |
+| Open returned exclusive access (`0xE00002C5`) | `!`. Launcher can be using the interface at the same time. That does not mean this app can open it too. |
+| Open returned not privileged / not permitted (`0xE00002C1`, `0xE00002E2`) | `!` and the Input Monitoring hint |
+| Interface opened, layer read timed out | `!` and a line that this is not a missing device |
+
+No trackball was attached while this was written, so none of those branches
+has been seen on hardware.

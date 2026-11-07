@@ -17,14 +17,16 @@ final class HIDMonitor {
     weak var delegate: HIDMonitorDelegate?
 
     private struct Slot {
-        var device: IOHIDDevice
+        var service: io_service_t
         var location: Int
         var interface: SeenInterface
     }
 
     private let bufferLength = 64
     private var manager: IOHIDManager?
-    private var devices: [Slot] = []
+    private var managerScheduled = false
+    private var slots: [Slot] = []
+    private(set) var registryStatus: Int32 = 0
     private var openedDevice: IOHIDDevice?
     private var openedLocation: Int?
     private var reportBuffer: UnsafeMutablePointer<UInt8>?
@@ -34,12 +36,18 @@ final class HIDMonitor {
     private var started = false
 
     var interfaces: [SeenInterface] {
-        devices.map(\.interface)
+        slots.map(\.interface)
     }
 
-    var openedIndex: Int? {
+    /// Product ids, transports, and usage pages. No serial number and no location id.
+    var diagnosticSummary: String {
+        let code = String(format: "%08X", UInt32(bitPattern: registryStatus))
+        return "registry 0x\(code) \(NapeIdentity.diagnosticSummary(interfaces))"
+    }
+
+        var openedIndex: Int? {
         guard let openedLocation else { return nil }
-        return devices.firstIndex { $0.location == openedLocation }
+        return slots.firstIndex { $0.location == openedLocation }
     }
 
     func start() {
@@ -48,12 +56,14 @@ final class HIDMonitor {
         started = true
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.manager = manager
-        let matches: [[String: Any]] = NapeIdentity.matches().map { match in
+        // Vendor and product only, so a mouse-primary interface still wakes a
+        // refresh. IOHIDManagerOpen is not called: that would open every match,
+        // including the pointer collection. Nothing is seized.
+        let products = [NapeOpcode.wiredProductID] + NapeIdentity.receivers.filter(\.attempted).map(\.productID)
+        let matches: [[String: Any]] = products.map { product in
             [
-                kIOHIDVendorIDKey: match.vendorID,
-                kIOHIDProductIDKey: match.productID,
-                kIOHIDPrimaryUsagePageKey: match.usagePage,
-                kIOHIDPrimaryUsageKey: match.usage,
+                kIOHIDVendorIDKey: NapeOpcode.vendorID,
+                kIOHIDProductIDKey: product,
             ]
         }
         IOHIDManagerSetDeviceMatchingMultiple(manager, matches as CFArray)
@@ -68,26 +78,35 @@ final class HIDMonitor {
         }
         IOHIDManagerRegisterDeviceMatchingCallback(manager, matched, context)
         IOHIDManagerRegisterDeviceRemovalCallback(manager, removed, context)
-        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
-        // Shared open of the matched RAW collections so arrival and removal
-        // callbacks run. This is not kIOHIDOptionsTypeSeizeDevice.
-        _ = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        scheduleManager()
         refreshDeviceList()
     }
 
     func refreshDeviceList() {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard !suspended, let manager else { return }
+        guard !suspended else { return }
+        let census = RegistryCensus.collect()
         let previous = interfaces
+        let previousStatus = registryStatus
         let previousOpen = openedLocation
-        devices = copyDevices(manager).sorted { lhs, rhs in
+        registryStatus = census.status
+        let sorted = census.hits.sorted { lhs, rhs in
+            if lhs.interface.productID != rhs.interface.productID {
+                return lhs.interface.productID < rhs.interface.productID
+            }
             if lhs.location != rhs.location { return lhs.location < rhs.location }
-            return lhs.interface.productID < rhs.interface.productID
+            return (lhs.interface.primaryUsagePage ?? 0) < (rhs.interface.primaryUsagePage ?? 0)
         }
-        if let previousOpen, !devices.contains(where: { $0.location == previousOpen }) {
+        for slot in slots {
+            IOObjectRelease(slot.service)
+        }
+        slots = sorted.map { hit in
+            Slot(service: hit.service, location: hit.location, interface: hit.interface)
+        }
+        if let previousOpen, !slots.contains(where: { $0.location == previousOpen }) {
             closeSession()
         }
-        if interfaces != previous || openedLocation != previousOpen {
+        if interfaces != previous || registryStatus != previousStatus || openedLocation != previousOpen {
             delegate?.hidMonitorInterfacesChanged()
         }
     }
@@ -97,13 +116,16 @@ final class HIDMonitor {
     func open(index: Int) -> Int32 {
         dispatchPrecondition(condition: .onQueue(.main))
         guard !suspended else { return kIOReturnNotOpen }
-        guard devices.indices.contains(index) else { return kIOReturnNoDevice }
-        let slot = devices[index]
+        guard slots.indices.contains(index) else { return kIOReturnNoDevice }
+        let slot = slots[index]
+        guard NapeIdentity.isOpenableRaw(slot.interface) else { return kIOReturnUnsupported }
         if openedLocation == slot.location, openedDevice != nil {
             return HIDResult.success
         }
         closeSession()
-        let result = IOHIDDeviceOpen(slot.device, IOOptionBits(kIOHIDOptionsTypeNone))
+        let device: IOHIDDevice? = IOHIDDeviceCreate(kCFAllocatorDefault, slot.service)
+        guard let device else { return kIOReturnNoDevice }
+        let result = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
         guard result == kIOReturnSuccess else { return result }
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferLength)
         buffer.initialize(repeating: 0, count: bufferLength)
@@ -116,13 +138,13 @@ final class HIDMonitor {
             let bytes = Array(UnsafeBufferPointer(start: report, count: Int(length)))
             monitor.deliver(bytes: bytes, reportID: reportID)
         }
-        IOHIDDeviceRegisterInputReportCallback(slot.device, buffer, bufferLength, callback, context)
+        IOHIDDeviceRegisterInputReportCallback(device, buffer, bufferLength, callback, context)
         IOHIDDeviceScheduleWithRunLoop(
-            slot.device,
+            device,
             CFRunLoopGetMain(),
             CFRunLoopMode.defaultMode.rawValue
         )
-        openedDevice = slot.device
+        openedDevice = device
         openedLocation = slot.location
         return HIDResult.success
     }
@@ -153,18 +175,35 @@ final class HIDMonitor {
         dispatchPrecondition(condition: .onQueue(.main))
         suspended = true
         closeSession()
-        devices = []
-        if let manager {
-            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
-        }
+        releaseSlots()
+        registryStatus = 0
+        unscheduleManager()
     }
 
     func resume() {
         dispatchPrecondition(condition: .onQueue(.main))
         suspended = false
-        guard let manager else { return }
-        _ = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        scheduleManager()
         refreshDeviceList()
+    }
+
+    private func scheduleManager() {
+        guard let manager, !managerScheduled else { return }
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        managerScheduled = true
+    }
+
+    private func unscheduleManager() {
+        guard let manager, managerScheduled else { return }
+        IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        managerScheduled = false
+    }
+
+    private func releaseSlots() {
+        for slot in slots {
+            IOObjectRelease(slot.service)
+        }
+        slots = []
     }
 
     private func deliver(bytes: [UInt8], reportID: UInt32) {
@@ -199,53 +238,4 @@ final class HIDMonitor {
         }
     }
 
-    private func copyDevices(_ manager: IOHIDManager) -> [Slot] {
-        guard let copied = IOHIDManagerCopyDevices(manager) else { return [] }
-        let set = copied as NSSet
-        var slots: [Slot] = []
-        for item in set {
-            guard CFGetTypeID(item as CFTypeRef) == IOHIDDeviceGetTypeID() else { continue }
-            let device = unsafeBitCast(item as AnyObject, to: IOHIDDevice.self)
-            guard let slot = slot(for: device) else { continue }
-            if slots.contains(where: { $0.location == slot.location && slot.location != 0 }) {
-                continue
-            }
-            slots.append(slot)
-        }
-        return slots
-    }
-
-    private func slot(for device: IOHIDDevice) -> Slot? {
-        guard let vendor = integer(device, key: kIOHIDVendorIDKey),
-              let product = integer(device, key: kIOHIDProductIDKey)
-        else { return nil }
-        var usagePage = integer(device, key: kIOHIDPrimaryUsagePageKey)
-            ?? integer(device, key: kIOHIDDeviceUsagePageKey)
-        var usage = integer(device, key: kIOHIDPrimaryUsageKey)
-            ?? integer(device, key: kIOHIDDeviceUsageKey)
-        // The manager already filtered on the RAW collection. If the property
-        // read is empty, keep the usage the match dictionary required.
-        if usagePage == nil { usagePage = NapeOpcode.rawUsagePage }
-        if usage == nil { usage = NapeOpcode.rawUsage }
-        let interface = SeenInterface(
-            vendorID: vendor,
-            productID: product,
-            productName: string(device, key: kIOHIDProductKey),
-            primaryUsagePage: usagePage,
-            primaryUsage: usage
-        )
-        let location = integer(device, key: kIOHIDLocationIDKey) ?? 0
-        return Slot(device: device, location: location, interface: interface)
-    }
-
-    private func integer(_ device: IOHIDDevice, key: String) -> Int? {
-        let raw = IOHIDDeviceGetProperty(device, key as CFString)
-        if let number = raw as? NSNumber { return number.intValue }
-        if let number = raw as? Int { return number }
-        return nil
-    }
-
-    private func string(_ device: IOHIDDevice, key: String) -> String? {
-        IOHIDDeviceGetProperty(device, key as CFString) as? String
-    }
 }

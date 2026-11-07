@@ -5,7 +5,7 @@ import AppKit
 
 /// Keep this aligned with CFBundleShortVersionString in build.sh.
 enum AppMetadata {
-    static let version = "0.1.0"
+    static let version = "0.1.1"
     static let bundleIdentifier = "local.slelham.nape-companion"
 }
 
@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, HIDMon
     private var timer: Timer?
     private var syncing = false
     private let debugLog = ProcessInfo.processInfo.environment["NAPE_COMPANION_DEBUG"] == "1"
+    private var lastDiagnostic = ""
 
     override init() {
         engine = CompanionEngine(names: LayerNames.load(from: UserDefaults.standard))
@@ -142,7 +143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, HIDMon
         syncing = true
         defer { syncing = false }
         let now = Date()
-        engine.interfacesChanged(monitor.interfaces)
+        logDiagnostic()
+        engine.interfacesChanged(monitor.interfaces, registryStatus: monitor.registryStatus)
         guard let index = engine.desiredDeviceIndex else {
             monitor.close()
             refreshTitle(at: now)
@@ -214,6 +216,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, HIDMon
             }
         }
         refreshTitle(at: now)
+    }
+
+    private func logDiagnostic() {
+        guard debugLog else { return }
+        let line = monitor.diagnosticSummary
+        guard line != lastDiagnostic else { return }
+        lastDiagnostic = line
+        FileHandle.standardError.write(Data("nape-companion \(line)\n".utf8))
     }
 
     private func logReport(_ bytes: [UInt8]) {
