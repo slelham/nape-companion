@@ -24,12 +24,30 @@ use.
 
 ## Build and run
 
+The app is on the draft branch `cursor/nape-menu-bar-57ff` (pull request 1).
+`main` is only the placeholder README until that pull request is merged.
+Clone that branch, or check it out after a clone of the repository:
+
 ```sh
-git clone https://github.com/slelham/nape-companion.git
+git clone --branch cursor/nape-menu-bar-57ff https://github.com/slelham/nape-companion.git
 cd nape-companion
 swift test
 ./build.sh
 open "build/Nape Companion.app"
+```
+
+If you already cloned `main`:
+
+```sh
+cd nape-companion
+git fetch origin cursor/nape-menu-bar-57ff
+git switch cursor/nape-menu-bar-57ff
+```
+
+With the GitHub CLI, from any checkout of this repository:
+
+```sh
+gh pr checkout 1 --repo slelham/nape-companion
 ```
 
 `./build.sh` writes `build/Nape Companion.app` in the current directory. It
@@ -125,21 +143,13 @@ If both the cable and a receiver are attached, the cable is used.
 
 ## Development checks
 
-From a checkout:
+Use the branch commands in **Build and run**. `swift test` checks the
+parser and menu states. `./build.sh` produces the app and only runs on macOS.
 
-```sh
-swift test
-./build.sh
-```
-
-GitHub Actions runs `swift test` on Linux with Swift 6.0.3, and on a macOS
-runner it runs `swift test` and `./build.sh`.
-
-While this repository was being written, `swift test` was run here on Linux
-with Swift 6.0.3 and the protocol suite passed (26 tests). This environment
-is not a Mac. `swiftc`, Xcode, and `codesign` were not available, so the
-`.app` was **not** built here. A green macOS job on the pull request is the
-compile check. Nothing in that job plugs in a trackball.
+GitHub Actions runs `swift test` on Ubuntu 24.04 with Swift 6.0.3, and on
+macOS it runs `swift test` and `./build.sh`. Neither job has a trackball.
+The Linux machine used to write this repository is not a Mac, so the `.app`
+is compiled by the macOS job and by `./build.sh` on your Mac.
 
 ## Hardware checklist
 

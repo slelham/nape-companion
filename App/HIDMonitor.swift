@@ -169,7 +169,10 @@ final class HIDMonitor {
 
     private func deliver(bytes: [UInt8], reportID: UInt32) {
         guard generation == callbackGeneration, !suspended else { return }
-        let forward = { self.delegate?.hidMonitorReceived(bytes: bytes, reportID: reportID) }
+        let forward = {
+            self.delegate?.hidMonitorReceived(bytes: bytes, reportID: reportID)
+            return
+        }
         if Thread.isMainThread {
             forward()
         } else {
@@ -198,10 +201,11 @@ final class HIDMonitor {
 
     private func copyDevices(_ manager: IOHIDManager) -> [Slot] {
         guard let copied = IOHIDManagerCopyDevices(manager) else { return [] }
-        guard let set = copied as? NSSet else { return [] }
+        let set = copied as NSSet
         var slots: [Slot] = []
         for item in set {
-            guard let device = item as? IOHIDDevice else { continue }
+            guard CFGetTypeID(item as CFTypeRef) == IOHIDDeviceGetTypeID() else { continue }
+            let device = unsafeBitCast(item as AnyObject, to: IOHIDDevice.self)
             guard let slot = slot(for: device) else { continue }
             if slots.contains(where: { $0.location == slot.location && slot.location != 0 }) {
                 continue
