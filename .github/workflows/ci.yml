@@ -30,3 +30,47 @@ jobs:
         run: test -x "build/Nape Companion.app/Contents/MacOS/NapeCompanion"
       - name: Show the ad-hoc signature
         run: codesign -dv "build/Nape Companion.app"
+      - name: Archive the signed app
+        env:
+          # pull_request runs check out a merge commit. Label the archive with
+          # the draft-branch commit so the download matches the source SHA.
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          APP="build/Nape Companion.app"
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+          if [[ "$VERSION" != "0.1.1" ]]; then
+            echo "Info.plist version is ${VERSION}; the artifact name expects 0.1.1" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          BASE="NapeCompanion-${VERSION}-${SOURCE_SHA}"
+          ZIP="dist/${BASE}.zip"
+          # ditto keeps the .app parent, the executable bit, and code-signing metadata.
+          ditto -c -k --keepParent "$APP" "$ZIP"
+          (cd dist && shasum -a 256 "${BASE}.zip") > "dist/${BASE}.sha256"
+          {
+            echo "version=${VERSION}"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "workflow_sha=${GITHUB_SHA}"
+            echo "event=${GITHUB_EVENT_NAME}"
+            echo "zip=${BASE}.zip"
+            echo "signature=adhoc"
+            echo "notarized=no"
+          } > dist/SOURCE.txt
+          UNPACK="$(mktemp -d)"
+          ditto -x -k "$ZIP" "$UNPACK"
+          test -x "$UNPACK/Nape Companion.app/Contents/MacOS/NapeCompanion"
+          codesign --verify --verbose=2 "$UNPACK/Nape Companion.app"
+          codesign -dv "$UNPACK/Nape Companion.app" > dist/codesign.txt 2>&1
+          grep -q 'Signature=adhoc' dist/codesign.txt
+          rm -rf "$UNPACK"
+          echo "Packed ${ZIP}"
+          cat "dist/${BASE}.sha256"
+      - name: Upload the signed app archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nape-companion-0.1.1-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0

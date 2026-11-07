@@ -66,16 +66,52 @@ Quit from the menu, or with ⌘Q while the menu is open.
 the menu-state rules. `./build.sh` is the step that produces the app, and
 it only runs on macOS.
 
+## Download a built app
+
+The macOS CI job uploads the ad-hoc signed app as a workflow artifact. That
+is a draft-branch build, not a GitHub Release, and it is not notarized.
+Nothing in CI copies it onto a Mac.
+
+The artifact name is `nape-companion-0.1.1-<source sha>`. Inside it:
+
+- `NapeCompanion-0.1.1-<source sha>.zip`, made with `ditto -c -k --keepParent`
+  so the `.app` parent, executable bit, and ad-hoc signature survive
+- `NapeCompanion-0.1.1-<source sha>.sha256`
+- `SOURCE.txt` with the version, source SHA, and `notarized=no`
+
+`gh run download` unwraps GitHub's outer archive and leaves those files.
+Check the checksum, then extract with `ditto` rather than `unzip`:
+
+```sh
+gh run download <run id> --repo slelham/nape-companion \
+  --name nape-companion-0.1.1-<source sha> \
+  --dir nape-companion-download
+cd nape-companion-download
+shasum -a 256 -c NapeCompanion-0.1.1-<source sha>.sha256
+mkdir -p unpacked
+ditto -x -k NapeCompanion-0.1.1-<source sha>.zip unpacked
+codesign -dv "unpacked/Nape Companion.app"
+```
+
+`codesign` should report `Signature=adhoc`. The menu should say
+**Nape Companion 0.1.1**. The same unidentified-developer confirmation
+described above applies. The run and artifact ids for the current build are
+on pull request 1.
+
 ## Permissions
 
 The app uses IOKit HID:
 
-- `IOHIDManager` with match dictionaries for vendor `0x3434`, product
-  `0x0440`, `0xD026`, or `0xD029`, and primary usage page `0xFF60` usage
-  `0x61`
-- `IOHIDManagerOpen` and `IOHIDDeviceOpen` with `kIOHIDOptionsTypeNone`
-- an input-report callback on that RAW collection
-- `IOHIDDeviceSetReport` of an output report, 32 bytes, report id 0
+- an I/O Registry walk of `IOHIDDevice` services. A service is opened only
+  when vendor `0x3434` and product `0x0440`, `0xD026`, or `0xD029` has
+  primary usage page `0xFF60` usage `0x61`, and the transport is not Bluetooth
+- `IOHIDDeviceOpen` with `kIOHIDOptionsTypeNone` (not seize)
+- `IOHIDManager` is scheduled so product matches can refresh the list. It is
+  not opened, because opening the manager would open every match, including
+  a mouse-pointer collection
+- an input-report callback on the opened RAW collection only
+- `IOHIDDeviceSetReport` of an output report, 32 bytes, report id 0, and
+  only the allowlisted reads
 
 It does not open the mouse-pointer collection, install a `CGEvent` tap, or
 watch the keyboard. It does not use the network, an account, or Bluetooth
@@ -177,8 +213,9 @@ System Information. The serial number is not needed.
 Use the branch commands in **Build and run**. `swift test` checks the
 parser and menu states. `./build.sh` produces the app and only runs on macOS.
 
-GitHub Actions runs `swift test` on Ubuntu 24.04 with Swift 6.0.3, and on
-macOS it runs `swift test` and `./build.sh`. Neither job has a trackball.
+GitHub Actions runs `swift test` on Ubuntu 24.04 with Swift 6.0.3. On macOS
+it runs `swift test`, `./build.sh`, and uploads the signed app as a workflow
+artifact named `nape-companion-0.1.1-<source sha>`. Neither job has a trackball.
 The Linux machine used to write this repository is not a Mac, so the `.app`
 is compiled by the macOS job and by `./build.sh` on your Mac.
 
